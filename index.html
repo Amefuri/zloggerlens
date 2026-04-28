@@ -404,8 +404,11 @@
 
   .detail-body {
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;
     padding: 20px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
   .detail-body::-webkit-scrollbar { width: 4px; }
   .detail-body::-webkit-scrollbar-track { background: transparent; }
@@ -419,6 +422,15 @@
     letter-spacing: 0.08em;
     margin-bottom: 10px;
   }
+
+  .section-block { margin-bottom: 22px; }
+  .section-block-fill {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+  .section-block-fill .section-title { flex-shrink: 0; }
 
   .kv-table {
     width: 100%;
@@ -452,9 +464,10 @@
     color: var(--text);
     white-space: pre-wrap;
     word-break: break-all;
-    max-height: 400px;
+    flex: 1;
     overflow-y: auto;
     tab-size: 2;
+    min-height: 0;
   }
   .json-block::-webkit-scrollbar { width: 4px; }
   .json-block::-webkit-scrollbar-thumb { background: rgba(108,99,255,0.45); border-radius: 2px; }
@@ -925,6 +938,8 @@ function renderPane(call, tab, reqHeaders, resHeaders) {
   const body = document.getElementById('detail-body');
   if (!body) return;
 
+  // overview & middleware scroll the whole body; request/response stretch the json-block
+  body.style.overflowY = (tab === 'request' || tab === 'response') ? 'hidden' : 'auto';
   if (tab === 'overview') {
     const isOk = call.statusCode >= 200 && call.statusCode < 300;
     const scClass = call.statusCode >= 400 ? 'sc-err' : isOk ? 'sc-ok' : '';
@@ -970,7 +985,7 @@ function renderPane(call, tab, reqHeaders, resHeaders) {
           <table class="kv-table">${hKeys.map(k=>`<tr><td>${escHtml(k)}</td><td>${escHtml(reqHeaders[k])}</td></tr>`).join('')}</table>
         </div>` : ''}
       ${call.reqBody ? `
-        <div class="section-block">
+        <div class="section-block-fill">
           <div class="section-title">Body</div>
           <div class="json-block">${syntaxHL(escHtml(prettyJSON(call.reqBody)))}</div>
         </div>` : '<div style="color:var(--text3);font-size:13px;font-family:var(--mono)">No request body captured</div>'}
@@ -986,7 +1001,7 @@ function renderPane(call, tab, reqHeaders, resHeaders) {
           <table class="kv-table">${hKeys.map(k=>`<tr><td>${escHtml(k)}</td><td>${escHtml(resHeaders[k])}</td></tr>`).join('')}</table>
         </div>` : ''}
       ${call.resBody ? `
-        <div class="section-block">
+        <div class="section-block-fill">
           <div class="section-title">Body</div>
           <div class="json-block">${syntaxHL(escHtml(prettyJSON(call.resBody)))}</div>
         </div>` : '<div style="color:var(--text3);font-size:13px;font-family:var(--mono)">No response body captured</div>'}
