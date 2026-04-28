@@ -423,6 +423,50 @@
     margin-bottom: 10px;
   }
 
+  .section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 0;
+    padding: 6px 0;
+  }
+  .section-toggle:hover .section-toggle-label { color: var(--text2); }
+  .section-toggle-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    transition: color 0.12s;
+  }
+  .section-toggle-count {
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--text3);
+    background: var(--surface3);
+    padding: 1px 6px;
+    border-radius: 99px;
+  }
+  .section-toggle-chevron {
+    margin-left: auto;
+    color: var(--text3);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+  }
+  .section-toggle-chevron.open { transform: rotate(90deg); }
+  .section-collapsible {
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.2s ease;
+    margin-bottom: 0;
+  }
+  .section-collapsible.open {
+    max-height: 600px;
+    margin-bottom: 12px;
+  }
+
   .section-block { margin-bottom: 22px; }
   .section-block-fill {
     display: flex;
@@ -934,6 +978,16 @@ function renderDetail(call) {
   renderPane(call, activeTab, reqHeaders, resHeaders);
 }
 
+function bindToggle(toggleId, bodyId) {
+  const toggle = document.getElementById(toggleId);
+  const content = document.getElementById(bodyId);
+  if (!toggle || !content) return;
+  toggle.addEventListener('click', () => {
+    const open = content.classList.toggle('open');
+    toggle.querySelector('.section-toggle-chevron').classList.toggle('open', open);
+  });
+}
+
 function renderPane(call, tab, reqHeaders, resHeaders) {
   const body = document.getElementById('detail-body');
   if (!body) return;
@@ -980,9 +1034,15 @@ function renderPane(call, tab, reqHeaders, resHeaders) {
     const hKeys = Object.keys(reqHeaders);
     body.innerHTML = `
       ${hKeys.length ? `
-        <div class="section-block">
-          <div class="section-title">Headers</div>
-          <table class="kv-table">${hKeys.map(k=>`<tr><td>${escHtml(k)}</td><td>${escHtml(reqHeaders[k])}</td></tr>`).join('')}</table>
+        <div class="section-block" style="flex-shrink:0">
+          <div class="section-toggle" id="req-hdr-toggle">
+            <span class="section-toggle-label">Headers</span>
+            <span class="section-toggle-count">${hKeys.length}</span>
+            <svg class="section-toggle-chevron" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4.5 2.5l4 4-4 4"/></svg>
+          </div>
+          <div class="section-collapsible" id="req-hdr-body">
+            <table class="kv-table" style="margin-top:8px">${hKeys.map(k=>`<tr><td>${escHtml(k)}</td><td>${escHtml(reqHeaders[k])}</td></tr>`).join('')}</table>
+          </div>
         </div>` : ''}
       ${call.reqBody ? `
         <div class="section-block-fill">
@@ -990,15 +1050,22 @@ function renderPane(call, tab, reqHeaders, resHeaders) {
           <div class="json-block">${syntaxHL(escHtml(prettyJSON(call.reqBody)))}</div>
         </div>` : '<div style="color:var(--text3);font-size:13px;font-family:var(--mono)">No request body captured</div>'}
     `;
+    bindToggle('req-hdr-toggle', 'req-hdr-body');
   }
 
   else if (tab === 'response') {
     const hKeys = Object.keys(resHeaders);
     body.innerHTML = `
       ${hKeys.length ? `
-        <div class="section-block">
-          <div class="section-title">Headers</div>
-          <table class="kv-table">${hKeys.map(k=>`<tr><td>${escHtml(k)}</td><td>${escHtml(resHeaders[k])}</td></tr>`).join('')}</table>
+        <div class="section-block" style="flex-shrink:0">
+          <div class="section-toggle" id="res-hdr-toggle">
+            <span class="section-toggle-label">Headers</span>
+            <span class="section-toggle-count">${hKeys.length}</span>
+            <svg class="section-toggle-chevron" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4.5 2.5l4 4-4 4"/></svg>
+          </div>
+          <div class="section-collapsible" id="res-hdr-body">
+            <table class="kv-table" style="margin-top:8px">${hKeys.map(k=>`<tr><td>${escHtml(k)}</td><td>${escHtml(resHeaders[k])}</td></tr>`).join('')}</table>
+          </div>
         </div>` : ''}
       ${call.resBody ? `
         <div class="section-block-fill">
@@ -1006,6 +1073,7 @@ function renderPane(call, tab, reqHeaders, resHeaders) {
           <div class="json-block">${syntaxHL(escHtml(prettyJSON(call.resBody)))}</div>
         </div>` : '<div style="color:var(--text3);font-size:13px;font-family:var(--mono)">No response body captured</div>'}
     `;
+    bindToggle('res-hdr-toggle', 'res-hdr-body');
   }
 
   else if (tab === 'middleware') {
