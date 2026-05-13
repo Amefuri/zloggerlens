@@ -930,7 +930,9 @@
       flex-shrink: 0;
     }
 
-    .stat-chip.analytic b { color: var(--teal); }
+    .stat-chip.analytic b {
+      color: var(--teal);
+    }
 
     .type-filter-row {
       display: flex;
@@ -962,8 +964,15 @@
       color: var(--text);
     }
 
-    .type-filter-btn.active.tf-api { border-color: var(--accent); color: var(--accent2); }
-    .type-filter-btn.active.tf-analytic { border-color: var(--teal); color: var(--teal); }
+    .type-filter-btn.active.tf-api {
+      border-color: var(--accent);
+      color: var(--accent2);
+    }
+
+    .type-filter-btn.active.tf-analytic {
+      border-color: var(--teal);
+      color: var(--teal);
+    }
   </style>
 </head>
 
@@ -1065,7 +1074,7 @@
     let typeFilter = 'all';
     let searchQuery = '';
 
-    // Type-filter buttons
+    // Type-filter buttons (add JSBridge)
     document.querySelectorAll('.type-filter-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         typeFilter = btn.dataset.type;
@@ -1101,12 +1110,15 @@
       const calls = [];
       let current = null;
       let currentAnalytic = null;
+      let currentJSBridge = null;
       let section = null;
       let buf = [];
       let pendingMW = [];
       let inNoticeBlock = false;
       let inAnalyticBlock = false;
+      let inJSBridgeBlock = false;
       let analyticBuf = [];
+      let jsbridgeBuf = [];
 
       const isSeparator = (s) => /^\u2013{3,}/.test(s) || /^-{10,}/.test(s);
 
@@ -1144,6 +1156,17 @@
         analyticBuf = [];
       };
 
+      const flushJSBridge = () => {
+        if (!currentJSBridge) return;
+        // Parse jsbridgeBuf for details
+        let direction = currentJSBridge.direction;
+        let payload = jsbridgeBuf.join('\n').trim();
+        currentJSBridge.payload = payload;
+        calls.push(currentJSBridge);
+        currentJSBridge = null;
+        jsbridgeBuf = [];
+      };
+
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const t = line.trim();
@@ -1160,6 +1183,17 @@
           }
         }
 
+        // Exit JSBridge block when next timestamp found
+        if (inJSBridgeBlock) {
+          if (t.match(/^\d{2}:\d{2}:\d{2}\.\d+\s+·/)) {
+            flushJSBridge();
+            inJSBridgeBlock = false;
+          } else {
+            jsbridgeBuf.push(line);
+            continue;
+          }
+        }
+
         // Analytics event header
         if (t.match(/^\d{2}:\d{2}:\d{2}\.\d+\s+·\s+INFO\s+·/) && t.includes('Analytics Event')) {
           if (current) { flush(); calls.push(current); current = null; }
@@ -1168,6 +1202,18 @@
           const tm = t.match(/^(\d{2}:\d{2}:\d{2}\.\d+)/);
           currentAnalytic = { type: 'analytic', time: tm ? tm[1] : '', logEvent: '', fields: {} };
           analyticBuf = [];
+          continue;
+        }
+
+        // JSBridge event header
+        if (t.match(/^\d{2}:\d{2}:\d{2}\.\d+\s+·\s+INFO\s+·/) && (t.includes('Received Jsbridge') || t.includes('Sent Jsbridge'))) {
+          if (current) { flush(); calls.push(current); current = null; }
+          inNoticeBlock = false;
+          inJSBridgeBlock = true;
+          const tm = t.match(/^(\d{2}:\d{2}:\d{2}\.\d+)/);
+          let direction = t.includes('Received Jsbridge') ? 'received' : 'sent';
+          currentJSBridge = { type: 'jsbridge', time: tm ? tm[1] : '', direction, payload: '' };
+          jsbridgeBuf = [];
           continue;
         }
 
@@ -1219,6 +1265,7 @@
       }
       if (current) { flush(); calls.push(current); }
       flushAnalytic();
+      flushJSBridge();
 
       allCalls = calls;
       selectedIdx = null;
@@ -1234,6 +1281,7 @@
     function renderAll() {
       const apiCalls = allCalls.filter(c => c.type === 'api');
       const analyticCalls = allCalls.filter(c => c.type === 'analytic');
+      const jsbridgeCalls = allCalls.filter(c => c.type === 'jsbridge');
       const okCount = apiCalls.filter(c => c.statusCode >= 200 && c.statusCode < 300).length;
       const errCount = apiCalls.filter(c => c.statusCode >= 400).length;
       const endpoints = [...new Set(apiCalls.map(c => c.path))];
@@ -1242,11 +1290,40 @@
       document.getElementById('s-err').textContent = errCount;
       document.getElementById('s-ep').textContent = endpoints.length;
       document.getElementById('s-analytic').textContent = analyticCalls.length;
+      // Add JSBridge stat chip if not present
+      let jsbStat = document.getElementById('s-jsbridge');
+      if (!jsbStat) {
+        const stat = document.createElement('span');
+        stat.className = 'stat-chip jsbridge';
+        stat.innerHTML = 'jsbridge: <b id="s-jsbridge">0</b>';
+        statsBar.appendChild(stat);
+        jsbStat = document.getElementById('s-jsbridge');
+      }
+      jsbStat.textContent = jsbridgeCalls.length;
       statsBar.style.display = 'flex';
       sidebarToolbar.style.display = 'flex';
 
+      // Add JSBridge filter button if not present
+      if (!document.getElementById('tf-jsbridge')) {
+        const row = document.querySelector('.type-filter-row');
+        const btn = document.createElement('button');
+        btn.className = 'type-filter-btn tf-jsbridge';
+        btn.dataset.type = 'jsbridge';
+        btn.id = 'tf-jsbridge';
+        btn.textContent = 'JSBridge only';
+        row.appendChild(btn);
+        btn.addEventListener('click', () => {
+          typeFilter = 'jsbridge';
+          document.querySelectorAll('.type-filter-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          activeFilter = 'all';
+          selectedIdx = null;
+          renderAll();
+        });
+      }
+
       // Filter chips — only relevant when viewing API calls
-      const showApiChips = typeFilter !== 'analytic';
+      const showApiChips = typeFilter !== 'analytic' && typeFilter !== 'jsbridge';
       filterChipsEl.style.display = showApiChips ? '' : 'none';
       if (showApiChips) {
         const chips = [{ val: 'all', label: 'All' }, { val: 'ok', label: '2xx' }, { val: 'err', label: '4xx+' }];
@@ -1274,6 +1351,7 @@
         // Type filter
         if (typeFilter === 'api' && c.type !== 'api') return false;
         if (typeFilter === 'analytic' && c.type !== 'analytic') return false;
+        if (typeFilter === 'jsbridge' && c.type !== 'jsbridge') return false;
         // API-specific status/endpoint filter
         if (c.type === 'api') {
           if (activeFilter === 'ok' && !(c.statusCode >= 200 && c.statusCode < 300)) return false;
@@ -1285,9 +1363,11 @@
           const q = searchQuery.toLowerCase();
           if (c.type === 'api') {
             if (!c.path.toLowerCase().includes(q) && !c.statusText.toLowerCase().includes(q) && !c.url.toLowerCase().includes(q)) return false;
-          } else {
+          } else if (c.type === 'analytic') {
             const blob = [c.logEvent, ...Object.values(c.fields || {})].join(' ').toLowerCase();
             if (!blob.includes(q)) return false;
+          } else if (c.type === 'jsbridge') {
+            if (!c.payload.toLowerCase().includes(q) && !c.direction.toLowerCase().includes(q)) return false;
           }
         }
         return true;
@@ -1319,6 +1399,19 @@
       </div>
       <div class="call-path-full">${escHtml(label)}</div>
       <div class="call-meta"><span>${call.time}</span>${call.logEvent ? '<span>·</span><span style="color:var(--teal);font-size:10px">' + escHtml(call.logEvent.split(' ')[0] || '') + '</span>' : ''}</div>
+    </div>`;
+        }
+        if (call.type === 'jsbridge') {
+          const icon = call.direction === 'received' ? '🌐→📱' : '📱→🌐';
+          return `<div class="call-item${orig === selectedIdx ? ' active' : ''}" data-orig="${orig}">
+      <div class="call-item-row1">
+        <span class="seq">${orig + 1}</span>
+        <span class="analytic-badge" style="background:var(--amber-bg);color:var(--amber)">JSB</span>
+        <span style="font-size:13px;margin-left:4px">${icon}</span>
+        <span class="status-dot s-ok" style="margin-left:auto"></span>
+      </div>
+      <div class="call-path-full">${escHtml(call.payload.split('\n')[0] || '(no payload)')}</div>
+      <div class="call-meta"><span>${call.time}</span><span>·</span><span style="color:var(--amber);font-size:10px">${call.direction}</span></div>
     </div>`;
         }
         const isOk = call.statusCode >= 200 && call.statusCode < 300;
@@ -1354,9 +1447,35 @@
           renderCallList();
           const entry = allCalls[selectedIdx];
           if (entry.type === 'analytic') renderAnalyticDetail(entry);
+          else if (entry.type === 'jsbridge') renderJSBridgeDetail(entry);
           else renderDetail(entry);
         });
       });
+    }
+    // JSBridge detail view
+    function renderJSBridgeDetail(call) {
+      mainPanel.innerHTML = `
+      <div class="detail-view">
+        <div class="detail-header">
+          <div class="detail-title">
+            <span class="analytic-badge" style="background:var(--amber-bg);color:var(--amber);font-size:11px;padding:3px 8px">JSB</span>
+            <span class="detail-url">${call.direction === 'received' ? '🌐→📱 Received Jsbridge' : '📱→🌐 Sent Jsbridge'}</span>
+            <span class="detail-status-badge" style="background:var(--amber-bg);color:var(--amber)">${call.direction}</span>
+          </div>
+        </div>
+        <div class="detail-body" style="overflow-y:auto">
+          <div class="section-block">
+            <div class="section-title">Summary</div>
+            <div class="overview-grid" style="grid-template-columns:repeat(2,1fr)">
+              <div class="ov-card"><div class="ov-label">Time</div><div class="ov-val">${call.time}</div></div>
+              <div class="ov-card"><div class="ov-label">Direction</div><div class="ov-val" style="color:var(--amber)">${call.direction}</div></div>
+            </div>
+            <table class="kv-table">
+              <tr><td>Payload</td><td><pre style="white-space:pre-wrap;font-family:var(--mono);font-size:12px;color:var(--text)">${escHtml(call.payload)}</pre></td></tr>
+            </table>
+          </div>
+        </div>
+      </div>`;
     }
 
     searchInput.addEventListener('input', e => { searchQuery = e.target.value; renderCallList(); });
