@@ -1367,11 +1367,27 @@
             const blob = [c.logEvent, ...Object.values(c.fields || {})].join(' ').toLowerCase();
             if (!blob.includes(q)) return false;
           } else if (c.type === 'jsbridge') {
-            if (!c.payload.toLowerCase().includes(q) && !c.direction.toLowerCase().includes(q)) return false;
+            const jsbName = extractJSBridgeName(c).toLowerCase();
+            if (!c.payload.toLowerCase().includes(q) && !c.direction.toLowerCase().includes(q) && !jsbName.includes(q)) return false;
           }
         }
         return true;
       });
+    }
+
+    function extractJSBridgeName(call) {
+      const payload = call.payload || '';
+      if (call.direction === 'sent') {
+        // Match: window.bridge.{functionName}(
+        const m = payload.match(/window\.bridge\.(\w+)\s*\(/);
+        return m ? m[1] : '(unknown)';
+      } else {
+        // Match top-level unquoted name: "name": logGaEvent]
+        // The top-level name is unquoted; nested "name" values (e.g. inside event{}) are quoted strings — skip those
+        const m = payload.match(/"name":\s*([^"{\[\s][^\],\n]*)/);
+        if (m) return m[1].trim();
+        return '(unknown)';
+      }
     }
 
     function renderCallList() {
@@ -1403,6 +1419,8 @@
         }
         if (call.type === 'jsbridge') {
           const icon = call.direction === 'received' ? '🌐→📱' : '📱→🌐';
+          const jsbName = extractJSBridgeName(call);
+          const payloadPreview = call.payload.split('\n')[0] || '';
           return `<div class="call-item${orig === selectedIdx ? ' active' : ''}" data-orig="${orig}">
       <div class="call-item-row1">
         <span class="seq">${orig + 1}</span>
@@ -1410,8 +1428,9 @@
         <span style="font-size:13px;margin-left:4px">${icon}</span>
         <span class="status-dot s-ok" style="margin-left:auto"></span>
       </div>
-      <div class="call-path-full">${escHtml(call.payload.split('\n')[0] || '(no payload)')}</div>
-      <div class="call-meta"><span>${call.time}</span><span>·</span><span style="color:var(--amber);font-size:10px">${call.direction}</span></div>
+      <div class="call-path-full" style="color:var(--text);font-weight:500">${escHtml(jsbName)}</div>
+      ${payloadPreview ? `<div class="call-path-full" style="color:var(--text3);font-size:10px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(payloadPreview)}</div>` : ''}
+      <div class="call-meta"><span>${call.time}</span><span>·</span><span style="color:${call.direction === 'received' ? 'var(--teal)' : 'var(--accent2)'};font-size:10px">${call.direction}</span></div>
     </div>`;
         }
         const isOk = call.statusCode >= 200 && call.statusCode < 300;
@@ -1452,14 +1471,14 @@
         });
       });
     }
-    // JSBridge detail view
     function renderJSBridgeDetail(call) {
+      const jsbName = extractJSBridgeName(call);
       mainPanel.innerHTML = `
       <div class="detail-view">
         <div class="detail-header">
           <div class="detail-title">
             <span class="analytic-badge" style="background:var(--amber-bg);color:var(--amber);font-size:11px;padding:3px 8px">JSB</span>
-            <span class="detail-url">${call.direction === 'received' ? '🌐→📱 Received Jsbridge' : '📱→🌐 Sent Jsbridge'}</span>
+            <span class="detail-url">${call.direction === 'received' ? '🌐→📱' : '📱→🌐'} ${escHtml(jsbName)}</span>
             <span class="detail-status-badge" style="background:var(--amber-bg);color:var(--amber)">${call.direction}</span>
           </div>
         </div>
@@ -1471,8 +1490,12 @@
               <div class="ov-card"><div class="ov-label">Direction</div><div class="ov-val" style="color:var(--amber)">${call.direction}</div></div>
             </div>
             <table class="kv-table">
-              <tr><td>Payload</td><td><pre style="white-space:pre-wrap;font-family:var(--mono);font-size:12px;color:var(--text)">${escHtml(call.payload)}</pre></td></tr>
+              <tr><td>Function</td><td style="color:var(--amber);font-weight:500">${escHtml(jsbName)}</td></tr>
             </table>
+          </div>
+          <div class="section-block-fill">
+            <div class="section-title">Payload</div>
+            <div class="json-block">${syntaxHL(escHtml(prettyJSON(call.payload) || call.payload))}</div>
           </div>
         </div>
       </div>`;
