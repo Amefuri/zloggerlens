@@ -30,6 +30,8 @@
       --amber-bg: rgba(251, 191, 36, 0.1);
       --blue: #60a5fa;
       --blue-bg: rgba(96, 165, 250, 0.1);
+      --teal: #2dd4bf;
+      --teal-bg: rgba(45, 212, 191, 0.1);
       --mono: 'JetBrains Mono', monospace;
       --sans: 'Syne', sans-serif;
       --radius: 10px;
@@ -915,6 +917,53 @@
       cursor: col-resize;
       user-select: none;
     }
+
+    /* ── Analytics ── */
+    .analytic-badge {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--teal-bg);
+      color: var(--teal);
+      flex-shrink: 0;
+    }
+
+    .stat-chip.analytic b { color: var(--teal); }
+
+    .type-filter-row {
+      display: flex;
+      gap: 3px;
+    }
+
+    .type-filter-btn {
+      flex: 1;
+      font-size: 11px;
+      font-family: var(--mono);
+      padding: 5px 0;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      color: var(--text3);
+      cursor: pointer;
+      transition: all 0.12s;
+      background: none;
+      text-align: center;
+    }
+
+    .type-filter-btn:hover {
+      border-color: var(--border2);
+      color: var(--text2);
+    }
+
+    .type-filter-btn.active {
+      background: var(--surface3);
+      border-color: var(--border2);
+      color: var(--text);
+    }
+
+    .type-filter-btn.active.tf-api { border-color: var(--accent); color: var(--accent2); }
+    .type-filter-btn.active.tf-analytic { border-color: var(--teal); color: var(--teal); }
   </style>
 </head>
 
@@ -940,10 +989,11 @@
     </label>
     <input type="file" id="file-input" accept=".txt,.log">
     <div class="stats-bar" id="stats-bar" style="display:none">
-      <span class="stat-chip">calls: <b id="s-total">0</b></span>
+      <span class="stat-chip">api: <b id="s-total">0</b></span>
       <span class="stat-chip ok">ok: <b id="s-ok">0</b></span>
       <span class="stat-chip err">err: <b id="s-err">0</b></span>
       <span class="stat-chip">endpoints: <b id="s-ep">0</b></span>
+      <span class="stat-chip analytic">analytics: <b id="s-analytic">0</b></span>
     </div>
   </div>
 
@@ -953,12 +1003,17 @@
     <!-- Sidebar -->
     <div class="sidebar">
       <div class="sidebar-toolbar" id="sidebar-toolbar" style="display:none">
+        <div class="type-filter-row">
+          <button class="type-filter-btn active" data-type="all" id="tf-all">All</button>
+          <button class="type-filter-btn tf-api" data-type="api" id="tf-api">API only</button>
+          <button class="type-filter-btn tf-analytic" data-type="analytic" id="tf-analytic">Analytics only</button>
+        </div>
         <div class="search-wrap">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
             <circle cx="6.5" cy="6.5" r="4.5" />
             <path d="M10 10l3 3" />
           </svg>
-          <input type="text" class="search-input" id="search-input" placeholder="Filter by path or status...">
+          <input type="text" class="search-input" id="search-input" placeholder="Filter by path, event or status...">
         </div>
         <div class="filter-chips" id="filter-chips"></div>
       </div>
@@ -1007,7 +1062,20 @@
     let allCalls = [];
     let selectedIdx = null;
     let activeFilter = 'all';
+    let typeFilter = 'all';
     let searchQuery = '';
+
+    // Type-filter buttons
+    document.querySelectorAll('.type-filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        typeFilter = btn.dataset.type;
+        document.querySelectorAll('.type-filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeFilter = 'all';
+        selectedIdx = null;
+        renderAll();
+      });
+    });
 
     // File input
     fileInput.addEventListener('change', e => { if (e.target.files[0]) readFile(e.target.files[0]); });
@@ -1032,12 +1100,15 @@
       const lines = text.split('\n');
       const calls = [];
       let current = null;
+      let currentAnalytic = null;
       let section = null;
       let buf = [];
       let pendingMW = [];
-      // Track whether we are inside a Before Request / After Response NOTICE block
-      // so we know middleware lines go to pendingMW, not to current call
       let inNoticeBlock = false;
+      let inAnalyticBlock = false;
+      let analyticBuf = [];
+
+      const isSeparator = (s) => /^\u2013{3,}/.test(s) || /^-{10,}/.test(s);
 
       const flush = () => {
         if (!current) return;
@@ -1048,33 +1119,65 @@
         buf = [];
       };
 
-      // en-dash separator line (–––––...) used throughout the log
-      const isSeparator = (s) => /^\u2013{3,}/.test(s) || /^-{10,}/.test(s);
+      const flushAnalytic = () => {
+        if (!currentAnalytic) return;
+        const fields = {};
+        let logEvent = '';
+        let inCustomDim = false;
+        let customDimKey = '';
+        for (const l of analyticBuf) {
+          const t = l.trim();
+          if (!t || isSeparator(t)) continue;
+          if (t.includes('\uD83E\uDEF6 LogEvent:')) { logEvent = t.replace(/.*\uD83E\uDEF6 LogEvent:\s*/, '').trim(); continue; }
+          if (t === ']') { inCustomDim = false; continue; }
+          if (inCustomDim) { fields[customDimKey] = (fields[customDimKey] ? fields[customDimKey] + ', ' : '') + t; continue; }
+          const m = t.match(/^([\w_]+):\s*(.*)$/);
+          if (m) {
+            if (m[2].trim() === '[') { inCustomDim = true; customDimKey = m[1]; fields[m[1]] = ''; }
+            else fields[m[1]] = m[2].trim();
+          }
+        }
+        currentAnalytic.logEvent = logEvent;
+        currentAnalytic.fields = fields;
+        calls.push(currentAnalytic);
+        currentAnalytic = null;
+        analyticBuf = [];
+      };
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const t = line.trim();
+        if (!t) continue;
 
-        if (!t) continue; // skip blank lines
+        // Exit analytics block when next timestamp found
+        if (inAnalyticBlock) {
+          if (t.match(/^\d{2}:\d{2}:\d{2}\.\d+\s+·/)) {
+            flushAnalytic();
+            inAnalyticBlock = false;
+          } else {
+            analyticBuf.push(line);
+            continue;
+          }
+        }
 
-        // ── NOTICE lines (Before Request / After Response) ──
-        // e.g. "11:19:59.201 · NOTICE · Before Request"
-        //      "11:19:59.379 · NOTICE · After Response"
-        // These blocks contain middleware names and DIFFING sections – we skip them
-        // but we collect middleware names into pendingMW for the NEXT HTTP result.
-        if (t.match(/^\d{2}:\d{2}:\d{2}\.\d+\s+·\s+NOTICE\s+·/)) {
-          inNoticeBlock = true;
+        // Analytics event header
+        if (t.match(/^\d{2}:\d{2}:\d{2}\.\d+\s+·\s+INFO\s+·/) && t.includes('Analytics Event')) {
+          if (current) { flush(); calls.push(current); current = null; }
+          inNoticeBlock = false;
+          inAnalyticBlock = true;
+          const tm = t.match(/^(\d{2}:\d{2}:\d{2}\.\d+)/);
+          currentAnalytic = { type: 'analytic', time: tm ? tm[1] : '', logEvent: '', fields: {} };
+          analyticBuf = [];
           continue;
         }
 
-        // ── Non-HTTP timestamp lines (INFO, etc.) — skip the whole block ──
-        if (t.match(/^\d{2}:\d{2}:\d{2}\.\d+\s+·\s+(?!(?:GET|POST|PUT|DELETE|PATCH)\s+·)/)) {
-          inNoticeBlock = true;
-          continue;
-        }
+        // NOTICE lines
+        if (t.match(/^\d{2}:\d{2}:\d{2}\.\d+\s+·\s+NOTICE\s+·/)) { inNoticeBlock = true; continue; }
 
-        // ── HTTP result line ──
-        // e.g. "11:19:59.387 · POST · 200 OK · 845 ไบต์"
+        // Other non-HTTP timestamp lines
+        if (t.match(/^\d{2}:\d{2}:\d{2}\.\d+\s+·\s+(?!(?:GET|POST|PUT|DELETE|PATCH)\s+·)/)) { inNoticeBlock = true; continue; }
+
+        // HTTP result line
         const httpMatch = t.match(/^(\d{2}:\d{2}:\d{2}\.\d+)\s+·\s+(GET|POST|PUT|DELETE|PATCH)\s+·\s+(\d{3}[^·]*?)\s+·\s+(.+)$/);
         if (httpMatch) {
           inNoticeBlock = false;
@@ -1082,8 +1185,6 @@
           const statusRaw = httpMatch[3].trim();
           const statusCode = parseInt(statusRaw) || 0;
           const size = httpMatch[4].trim();
-
-          // URL is on the next non-empty, non-separator line
           let url = '';
           for (let j = i + 1; j < lines.length; j++) {
             const next = lines[j].trim();
@@ -1091,119 +1192,103 @@
             if (next.match(/^https?:\/\//)) { url = next; i = j; }
             break;
           }
-
-          current = {
-            time: httpMatch[1],
-            method: httpMatch[2],
-            statusCode,
-            statusText: statusRaw,
-            url,
-            path: '',
-            reqBody: '',
-            resBody: '',
-            reqHeadersRaw: '',
-            resHeadersRaw: '',
-            middlewares: [...pendingMW],
-            size
-          };
+          current = { type: 'api', time: httpMatch[1], method: httpMatch[2], statusCode, statusText: statusRaw, url, path: '', reqBody: '', resBody: '', reqHeadersRaw: '', resHeadersRaw: '', middlewares: [...pendingMW], size };
           pendingMW = [];
           try { current.path = new URL(current.url).pathname; } catch (e) { current.path = current.url; }
           section = null; buf = [];
           continue;
         }
 
-        // ── Separator lines — skip ──
         if (isSeparator(t)) continue;
 
-        // ── Inside a NOTICE block: collect middleware names into pendingMW ──
         if (inNoticeBlock) {
-          if (t.match(/^(ApiHeaderMiddleware|AESECBMiddlewareLive|SodiumMiddlewareLive)/)) {
-            pendingMW.push(t);
-          }
-          // Everything else in NOTICE block (REQUEST DIFFING, DATA DIFFING, etc.) is skipped
+          if (t.match(/^(ApiHeaderMiddleware|AESECBMiddlewareLive|SodiumMiddlewareLive)/)) pendingMW.push(t);
           continue;
         }
 
-        // ── Inside an HTTP result block ──
         if (!current) continue;
-
-        // Skip noise lines
         if (t === 'URLSessionDataTask') continue;
         if (t.match(/^Host:/)) continue;
-        if (t.match(/^Date:\s*[\u2013-]\s*$/)) continue; // "Date: –" lines
-
-        // Section headers
-        // "Request Headers" or "Request Headers (N)"
-        if (t.match(/^Request Headers/)) {
-          flush(); section = 'req_headers'; buf = []; continue;
-        }
-        // "Request Body" or "Request Body (N ไบต์)"
-        if (t.match(/^Request Body/)) {
-          flush(); section = 'req_body'; buf = []; continue;
-        }
-        // "Response Headers" or "Response Headers (N)"
-        if (t.match(/^Response Headers/)) {
-          flush(); section = 'res_headers'; buf = []; continue;
-        }
-        // "Response Body" or "Response Body (N ไบต์)"
-        if (t.match(/^Response Body/)) {
-          flush(); section = 'res_body'; buf = []; continue;
-        }
-
-        // Single "–" means empty headers section — skip it
+        if (t.match(/^Date:\s*[\u2013-]\s*$/)) continue;
+        if (t.match(/^Request Headers/)) { flush(); section = 'req_headers'; buf = []; continue; }
+        if (t.match(/^Request Body/)) { flush(); section = 'req_body'; buf = []; continue; }
+        if (t.match(/^Response Headers/)) { flush(); section = 'res_headers'; buf = []; continue; }
+        if (t.match(/^Response Body/)) { flush(); section = 'res_body'; buf = []; continue; }
         if (t === '\u2013') continue;
-
-        // Accumulate body / header content
         if (section) buf.push(line);
       }
       if (current) { flush(); calls.push(current); }
+      flushAnalytic();
 
       allCalls = calls;
       selectedIdx = null;
+      activeFilter = 'all';
+      typeFilter = 'api';
+      // Sync type-filter button active state
+      document.querySelectorAll('.type-filter-btn').forEach(b => b.classList.remove('active'));
+      const tfApi = document.getElementById('tf-api');
+      if (tfApi) tfApi.classList.add('active');
       renderAll();
     }
 
     function renderAll() {
-      // Stats
-      const okCount = allCalls.filter(c => c.statusCode >= 200 && c.statusCode < 300).length;
-      const errCount = allCalls.filter(c => c.statusCode >= 400).length;
-      const endpoints = [...new Set(allCalls.map(c => c.path))];
-      document.getElementById('s-total').textContent = allCalls.length;
+      const apiCalls = allCalls.filter(c => c.type === 'api');
+      const analyticCalls = allCalls.filter(c => c.type === 'analytic');
+      const okCount = apiCalls.filter(c => c.statusCode >= 200 && c.statusCode < 300).length;
+      const errCount = apiCalls.filter(c => c.statusCode >= 400).length;
+      const endpoints = [...new Set(apiCalls.map(c => c.path))];
+      document.getElementById('s-total').textContent = apiCalls.length;
       document.getElementById('s-ok').textContent = okCount;
       document.getElementById('s-err').textContent = errCount;
       document.getElementById('s-ep').textContent = endpoints.length;
+      document.getElementById('s-analytic').textContent = analyticCalls.length;
       statsBar.style.display = 'flex';
       sidebarToolbar.style.display = 'flex';
 
-      // Filter chips
-      const chips = [{ val: 'all', label: 'All' }, { val: 'ok', label: '2xx' }, { val: 'err', label: '4xx+' }];
-      endpoints.slice(0, 5).forEach(ep => {
-        const seg = ep.split('/').filter(Boolean).pop() || ep;
-        chips.push({ val: ep, label: seg });
-      });
-      filterChipsEl.innerHTML = chips.map(c =>
-        `<button class="filter-chip${c.val === activeFilter ? ' active' : ''}" data-val="${c.val}">${c.label}</button>`
-      ).join('');
-      filterChipsEl.querySelectorAll('.filter-chip').forEach(btn => {
-        btn.addEventListener('click', () => { activeFilter = btn.dataset.val; renderAll(); });
-      });
+      // Filter chips — only relevant when viewing API calls
+      const showApiChips = typeFilter !== 'analytic';
+      filterChipsEl.style.display = showApiChips ? '' : 'none';
+      if (showApiChips) {
+        const chips = [{ val: 'all', label: 'All' }, { val: 'ok', label: '2xx' }, { val: 'err', label: '4xx+' }];
+        endpoints.slice(0, 5).forEach(ep => {
+          const seg = ep.split('/').filter(Boolean).pop() || ep;
+          chips.push({ val: ep, label: seg });
+        });
+        filterChipsEl.innerHTML = chips.map(c =>
+          `<button class="filter-chip${c.val === activeFilter ? ' active' : ''}" data-val="${c.val}">${c.label}</button>`
+        ).join('');
+        filterChipsEl.querySelectorAll('.filter-chip').forEach(btn => {
+          btn.addEventListener('click', () => { activeFilter = btn.dataset.val; renderAll(); });
+        });
+      }
 
       renderCallList();
 
-      // Show main panel
       if (!document.querySelector('.detail-view')) {
-        mainPanel.innerHTML = '<div class="no-select-msg"><svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 14h20M14 4v20"/></svg><span>Select a request to inspect</span></div>';
+        mainPanel.innerHTML = '<div class="no-select-msg"><svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 14h20M14 4v20"/></svg><span>Select an entry to inspect</span></div>';
       }
     }
 
     function getFiltered() {
-      return allCalls.filter((c, i) => {
-        if (activeFilter === 'ok' && !(c.statusCode >= 200 && c.statusCode < 300)) return false;
-        if (activeFilter === 'err' && c.statusCode < 400) return false;
-        if (activeFilter !== 'all' && activeFilter !== 'ok' && activeFilter !== 'err' && !c.path.includes(activeFilter)) return false;
+      return allCalls.filter(c => {
+        // Type filter
+        if (typeFilter === 'api' && c.type !== 'api') return false;
+        if (typeFilter === 'analytic' && c.type !== 'analytic') return false;
+        // API-specific status/endpoint filter
+        if (c.type === 'api') {
+          if (activeFilter === 'ok' && !(c.statusCode >= 200 && c.statusCode < 300)) return false;
+          if (activeFilter === 'err' && c.statusCode < 400) return false;
+          if (activeFilter !== 'all' && activeFilter !== 'ok' && activeFilter !== 'err' && !c.path.includes(activeFilter)) return false;
+        }
+        // Search
         if (searchQuery) {
           const q = searchQuery.toLowerCase();
-          if (!c.path.toLowerCase().includes(q) && !c.statusText.toLowerCase().includes(q) && !c.url.toLowerCase().includes(q)) return false;
+          if (c.type === 'api') {
+            if (!c.path.toLowerCase().includes(q) && !c.statusText.toLowerCase().includes(q) && !c.url.toLowerCase().includes(q)) return false;
+          } else {
+            const blob = [c.logEvent, ...Object.values(c.fields || {})].join(' ').toLowerCase();
+            if (!blob.includes(q)) return false;
+          }
         }
         return true;
       });
@@ -1219,6 +1304,23 @@
       const origIdxMap = reversed.map(c => allCalls.indexOf(c));
       callListEl.innerHTML = reversed.map((call, fi) => {
         const orig = origIdxMap[fi];
+        if (call.type === 'analytic') {
+          const parts = [
+            call.fields?.event_label,
+            call.fields?.event_name,
+            call.fields?.event_ui
+          ].filter(v => v && v !== 'nil');
+          const label = parts.length ? parts.join(' - ') : 'event';
+          return `<div class="call-item${orig === selectedIdx ? ' active' : ''}" data-orig="${orig}">
+      <div class="call-item-row1">
+        <span class="seq">${orig + 1}</span>
+        <span class="analytic-badge">EVENT</span>
+        <span class="status-dot s-ok" style="margin-left:auto"></span>
+      </div>
+      <div class="call-path-full">${escHtml(label)}</div>
+      <div class="call-meta"><span>${call.time}</span>${call.logEvent ? '<span>·</span><span style="color:var(--teal);font-size:10px">' + escHtml(call.logEvent.split(' ')[0] || '') + '</span>' : ''}</div>
+    </div>`;
+        }
         const isOk = call.statusCode >= 200 && call.statusCode < 300;
         const isErr = call.statusCode >= 400;
         const dotClass = isErr ? 's-err' : isOk ? 's-ok' : 's-pend';
@@ -1250,7 +1352,9 @@
         el.addEventListener('click', () => {
           selectedIdx = parseInt(el.dataset.orig);
           renderCallList();
-          renderDetail(allCalls[selectedIdx]);
+          const entry = allCalls[selectedIdx];
+          if (entry.type === 'analytic') renderAnalyticDetail(entry);
+          else renderDetail(entry);
         });
       });
     }
@@ -1446,6 +1550,47 @@
     `).join('');
         body.innerHTML = `<div class="section-block"><div class="section-title">Middleware chain</div><div class="mw-chain">${nodes}</div></div>`;
       }
+    }
+
+    function renderAnalyticDetail(call) {
+      const fields = call.fields || {};
+      const rows = Object.entries(fields).map(([k, v]) => {
+        const val = (v === null || v === undefined) ? '' : String(v);
+        const isEmpty = val === '' || val === 'nil';
+        return `<tr>
+          <td>${escHtml(k)}</td>
+          <td style="${isEmpty ? 'color:var(--text3)' : ''}">${escHtml(val || 'nil')}</td>
+        </tr>`;
+      }).join('');
+
+      mainPanel.innerHTML = `
+      <div class="detail-view">
+        <div class="detail-header">
+          <div class="detail-title">
+            <span class="analytic-badge" style="font-size:11px;padding:3px 8px">EVENT</span>
+            <span class="detail-url">${escHtml(call.logEvent || 'Analytics Event')}</span>
+            <span class="detail-status-badge" style="background:var(--teal-bg);color:var(--teal)">${escHtml(fields.event_name || 'event')}</span>
+          </div>
+        </div>
+        <div class="detail-body" style="overflow-y:auto">
+          <div class="section-block">
+            <div class="section-title">Summary</div>
+            <div class="overview-grid" style="grid-template-columns:repeat(2,1fr)">
+              <div class="ov-card"><div class="ov-label">Time</div><div class="ov-val">${escHtml(call.time)}</div></div>
+              <div class="ov-card"><div class="ov-label">Event Name</div><div class="ov-val" style="color:var(--teal)">${escHtml(fields.event_name || '–')}</div></div>
+            </div>
+            <table class="kv-table">
+              <tr><td>Log Event</td><td>${escHtml(call.logEvent || '–')}</td></tr>
+              ${fields.screen_name ? `<tr><td>Screen</td><td>${escHtml(fields.screen_name)}</td></tr>` : ''}
+              ${fields.event_ui ? `<tr><td>UI</td><td>${escHtml(fields.event_ui)}</td></tr>` : ''}
+            </table>
+          </div>
+          ${rows ? `<div class="section-block">
+            <div class="section-title">All Fields</div>
+            <table class="kv-table">${rows}</table>
+          </div>` : ''}
+        </div>
+      </div>`;
     }
 
     // ── Sidebar resize ──
