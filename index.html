@@ -1577,7 +1577,10 @@
       if (copyBtn) {
         copyBtn.addEventListener('click', () => {
           let text =
-            `API URL:\n${call.url}\n\n` +
+            `API URL: ${call.url}\n` +
+            `Method: ${call.method}\n` +
+            `Status: ${call.statusText}\n` +
+            `Time: ${call.time}\n\n` +
             `Request Body:\n${call.reqBody ? call.reqBody : '(none)'}\n\n` +
             `Response Body:\n${call.resBody ? call.resBody : '(none)'}\n`;
           navigator.clipboard.writeText(text).then(() => {
