@@ -1563,6 +1563,7 @@
           <span class="method-badge m-${call.method}">${call.method}</span>
           <span class="detail-url" title="${call.url}">${call.url}</span>
           <span class="detail-status-badge ${dsbClass}">${call.statusText}</span>
+          <button id="copy-api-btn" title="Copy API info" style="margin-left:16px;padding:4px 10px;font-size:12px;border-radius:6px;border:1px solid var(--border2);background:var(--surface2);color:var(--text2);cursor:pointer;transition:all 0.15s;">Copy</button>
         </div>
         <div class="detail-tabs">
           ${tabs.map(t => `<div class="detail-tab${t === activeTab ? ' active' : ''}" data-tab="${t}">${tabLabels[t]}</div>`).join('')}
@@ -1570,6 +1571,21 @@
       </div>
       <div class="detail-body" id="detail-body"></div>
     </div>`;
+
+      // Copy button logic
+      const copyBtn = mainPanel.querySelector('#copy-api-btn');
+      if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+          let text =
+            `API URL:\n${call.url}\n\n` +
+            `Request Body:\n${call.reqBody ? call.reqBody : '(none)'}\n\n` +
+            `Response Body:\n${call.resBody ? call.resBody : '(none)'}\n`;
+          navigator.clipboard.writeText(text).then(() => {
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
+          });
+        });
+      }
 
       mainPanel.querySelectorAll('.detail-tab').forEach(tab => {
         tab.addEventListener('click', () => {
